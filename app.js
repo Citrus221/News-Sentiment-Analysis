@@ -8,6 +8,7 @@ const NEWS_KEYS = {
   fmp: "FMP_API_KEY",
   alphaVantage: "ALPHAVANTAGE_API_KEY"
 };
+const API_BASE_STORAGE_KEY = "NEWS_SENTIMENT_API_BASE";
 const LOCAL_API_BASES = ["http://127.0.0.1:48992", "http://localhost:48992"];
 const DEBUG_RELEVANCE = new URLSearchParams(window.location.search).has("debugRelevance");
 
@@ -276,11 +277,13 @@ async function loadSymbolMaster({ forceRefresh = false } = {}) {
 }
 
 async function fetchSymbolMasterFromProviders() {
-  try {
-    return await fetchApiJson("/api/symbols");
-  } catch {
-    // Static-file preview fallback. In production, use /api/symbols to avoid CORS
-    // and to keep provider details server-side.
+  if (hasBackendApi()) {
+    try {
+      return await fetchApiJson("/api/symbols");
+    } catch {
+      // Browser-readable symbol sources below keep static previews usable when
+      // the configured backend is temporarily unavailable.
+    }
   }
 
   try {
@@ -431,16 +434,18 @@ async function selectCompany(company, { preserveSearch = false, resetPage = true
 }
 
 async function fetchNewsForCompany(company) {
-  try {
-    const params = new URLSearchParams({
-      symbol: company.symbol,
-      companyName: company.companyName,
-      range: MAX_NEWS_RANGE
-    });
-    return await fetchApiJson(`/api/news?${params.toString()}`);
-  } catch (error) {
-    if (!isLocalPreview()) {
-      throw error;
+  if (hasBackendApi()) {
+    try {
+      const params = new URLSearchParams({
+        symbol: company.symbol,
+        companyName: company.companyName,
+        range: MAX_NEWS_RANGE
+      });
+      return await fetchApiJson(`/api/news?${params.toString()}`);
+    } catch (error) {
+      if (!canUseBrowserProviderFallback()) {
+        throw error;
+      }
     }
   }
 
@@ -453,7 +458,7 @@ async function fetchNewsForCompany(company) {
   if (alphaKey) return fetchAlphaVantageNews(company, alphaKey);
 
   throw new Error(
-    "Live news needs the local app server or a configured provider key. Run node server.js and open http://127.0.0.1:48992, or add a provider key in local storage."
+    getMissingProviderMessage(company)
   );
 }
 
@@ -1125,6 +1130,11 @@ function renderDataNote() {
     els.dataNote.textContent = state.statusMessage;
     return;
   }
+  if (!hasBackendApi() && !isLocalPreview() && !isLocalServer()) {
+    els.dataNote.textContent =
+      "Static GitHub Pages mode is active. Search uses the bundled fallback symbols unless browser-readable symbol data loads; live news needs a deployed API base or a browser provider key.";
+    return;
+  }
   els.dataNote.textContent =
     state.symbolMaster === fallbackSecurities
       ? "Fallback search is active for common U.S. stocks and ETFs. For live news, run node server.js and open http://127.0.0.1:48992."
@@ -1350,18 +1360,20 @@ function readSymbolCache() {
 }
 
 async function fetchText(url) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Provider request failed: ${response.status}`);
+  const response = await fetchProvider(url);
+  if (!response.ok) {
+    throw new Error(formatProviderError(url, response));
+  }
   return response.text();
 }
 
 async function fetchJson(url) {
-  const response = await fetch(url);
+  const response = await fetchProvider(url);
   if (!response.ok) {
-    let message = `Provider request failed: ${response.status}`;
+    let message = formatProviderError(url, response);
     try {
       const payload = await response.json();
-      if (payload.error) message = payload.error;
+      if (payload.error) message = `${message}. Provider response: ${payload.error}`;
     } catch {
       // Keep the status-based message when the response is not JSON.
     }
@@ -1370,8 +1382,21 @@ async function fetchJson(url) {
   return response.json();
 }
 
+async function fetchProvider(url) {
+  try {
+    return await fetch(url);
+  } catch (error) {
+    throw new Error(`Provider request failed for ${url}: ${error.message || "network or CORS error"}`);
+  }
+}
+
 async function fetchApiJson(path) {
   const candidates = getApiCandidates(path);
+  if (!candidates.length) {
+    throw new Error(
+      "No backend API is configured for this static page. GitHub Pages cannot serve /api routes; set window.NEWS_SENTIMENT_API_BASE to a deployed API origin or use browser provider keys."
+    );
+  }
   let lastError;
   for (const candidate of candidates) {
     try {
@@ -1384,12 +1409,54 @@ async function fetchApiJson(path) {
 }
 
 function getApiCandidates(path) {
-  if (!isLocalPreview()) return [path];
-  return LOCAL_API_BASES.map((base) => `${base}${path}`);
+  const configuredBase = getConfiguredApiBase();
+  if (configuredBase) return [joinUrl(configuredBase, path)];
+  if (isLocalServer()) return [path];
+  if (isLocalPreview()) return LOCAL_API_BASES.map((base) => `${base}${path}`);
+  return [];
+}
+
+function hasBackendApi() {
+  return Boolean(getApiCandidates("/api/news").length);
+}
+
+function getConfiguredApiBase() {
+  const configured = window.NEWS_SENTIMENT_API_BASE || localStorage.getItem(API_BASE_STORAGE_KEY) || "";
+  return String(configured).trim().replace(/\/+$/, "");
+}
+
+function joinUrl(base, path) {
+  return `${base}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
 function isLocalPreview() {
   return window.location.protocol === "file:";
+}
+
+function isLocalServer() {
+  return ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+}
+
+function canUseBrowserProviderFallback() {
+  return isLocalPreview() || isLocalServer() || !hasBackendApi();
+}
+
+function getMissingProviderMessage(company) {
+  if (!hasBackendApi() && !isLocalPreview() && !isLocalServer()) {
+    return [
+      `No live news provider is configured for ${company.symbol}.`,
+      "This GitHub Pages deployment is static-only, so it cannot run /api/news or keep provider API keys server-side.",
+      "Deploy server.js as an API service and set window.NEWS_SENTIMENT_API_BASE, or add a browser-supported provider key in local storage."
+    ].join(" ");
+  }
+  return (
+    "Live news needs the local app server or a configured provider key. Run node server.js and open http://127.0.0.1:48992, or add a provider key in local storage."
+  );
+}
+
+function formatProviderError(url, response) {
+  const status = [response.status, response.statusText].filter(Boolean).join(" ");
+  return `Provider request failed for ${url}: ${status || "unknown HTTP error"}`;
 }
 
 function setProviderStatus(status, message) {
