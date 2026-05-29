@@ -539,80 +539,277 @@ async function fetchAlphaVantageNews(company, apiKey) {
 }
 
 function normalizeNewsArticle(raw) {
+  const headline = cleanText(raw.headline);
+  const summary = cleanText(raw.summary);
   const analysis = analyzeSentiment(
-    `${raw.headline || ""}. ${raw.summary || ""}`,
+    {
+      headline,
+      abstract: summary,
+      body: "",
+      fieldsUsed: summary ? "headline_and_abstract" : "headline_only",
+      fullText: [headline, summary].filter(Boolean).join(". ")
+    },
     raw.providerSentiment,
     raw.providerScore
   );
   return {
     id: String(raw.id || raw.url || raw.headline),
-    headline: cleanText(raw.headline),
+    headline,
     source: cleanText(raw.source),
     publishedAt: raw.publishedAt,
     url: raw.url,
-    summary: truncate(cleanText(raw.summary), 220),
+    summary: truncate(summary, 220),
     relatedSymbols: raw.relatedSymbols || [],
     sentiment: analysis.sentiment,
     confidence: analysis.confidence,
     reasoning: analysis.reasoning,
+    sentimentMethod: analysis.method,
+    sentimentTextFieldsUsed: summary ? "headline_and_abstract" : "headline_only",
+    sentimentDebug: analysis.debug,
+    analysisContext: truncate([headline, summary].filter(Boolean).join(". "), 1400),
     topic: classifyTopic(`${raw.headline || ""} ${raw.summary || ""}`),
     verifiedSource: raw.verifiedSource || false
   };
 }
 
-function analyzeSentiment(text, providerSentiment, providerScore) {
-  const normalizedProvider = String(providerSentiment || "").toLowerCase();
-  if (normalizedProvider.includes("bullish") || normalizedProvider.includes("positive")) {
-    return sentimentResult("Positive", 0.78, "Provider sentiment and article metadata lean positive.");
-  }
-  if (normalizedProvider.includes("bearish") || normalizedProvider.includes("negative")) {
-    return sentimentResult("Negative", 0.78, "Provider sentiment and article metadata lean negative.");
-  }
+function analyzeSentiment(textParts, providerSentiment, providerScore) {
+  const nlp = runLocalFinanceNlpModel(textParts);
+  if (nlp.available) return nlp;
 
-  const lower = text.toLowerCase();
-  const positive = countMatches(lower, [
-    "beat",
-    "tops estimates",
-    "above estimates",
-    "raises",
-    "record",
-    "growth",
-    "partnership",
-    "approval",
-    "upgrade",
-    "buyback",
-    "dividend"
-  ]);
-  const negative = countMatches(lower, [
-    "miss",
-    "cuts",
-    "lawsuit",
-    "probe",
-    "investigation",
-    "recall",
-    "downgrade",
-    "loss",
-    "decline",
-    "warning",
-    "export control",
-    "regulatory"
-  ]);
-  const score = positive - negative;
-  if (score > 0) {
-    return sentimentResult("Positive", Math.min(0.86, 0.58 + score * 0.08), "Positive language outweighs caution in the headline and public snippet.");
-  }
-  if (score < 0) {
-    return sentimentResult("Negative", Math.min(0.86, 0.58 + Math.abs(score) * 0.08), "Risk or downside language outweighs positive signals in the headline and public snippet.");
-  }
-  if (Number.isFinite(providerScore) && Math.abs(providerScore) > 0.05) {
-    const label = providerScore > 0 ? "Positive" : "Negative";
-    return sentimentResult(label, 0.68, "Provider sentiment score is directional but low enough to retain uncertainty.");
-  }
-  return sentimentResult("Neutral", 0.62, "The available headline and snippet do not contain a strong directional signal.");
+  const provider = providerSentimentResult(providerSentiment, providerScore);
+  if (provider) return provider;
+
+  return keywordFallbackSentiment(textParts.fullText);
 }
 
-function sentimentResult(sentiment, confidence, reasoning) {
-  return { sentiment, confidence, reasoning };
+function runLocalFinanceNlpModel(textParts) {
+  const text = cleanText(textParts.fullText);
+  if (!text) return { available: false };
+
+  const headlineScore = scoreFinanceText(textParts.headline, 1.45);
+  const abstractScore = scoreFinanceText(textParts.abstract, 1.05);
+  const bodyScore = scoreFinanceText(textParts.body, 0.85);
+  const combined = mergeSentimentScores([headlineScore, abstractScore, bodyScore]);
+  const probabilities = scoresToProbabilities(combined);
+  const ranked = Object.entries(probabilities).sort((a, b) => b[1] - a[1]);
+  const top = ranked[0];
+  const second = ranked[1];
+  const margin = top[1] - second[1];
+  const mixedSignals = combined.positiveSignals > 0 && combined.negativeSignals > 0;
+  const disagreement = hasDirectionalDisagreement(headlineScore, bodyScore);
+  const directionalSignals = combined.positiveSignals + combined.negativeSignals;
+  const directionalMargin = Math.abs(combined.positive - combined.negative);
+  const signalStrength = Math.max(combined.positive, combined.negative);
+  const shortTextPenalty = text.length < 180 ? 0.12 : text.length < 420 ? 0.06 : 0;
+  const qualityBoost = textParts.body ? 0.07 : textParts.abstract ? 0.03 : -0.06;
+  let sentiment = top[0];
+
+  if (signalStrength >= 1.15 && directionalMargin >= 0.45) {
+    sentiment = combined.positive > combined.negative ? "Positive" : "Negative";
+  }
+  if (sentiment !== "Neutral" && directionalSignals === 0) {
+    sentiment = "Neutral";
+  }
+  if (sentiment !== "Neutral" && mixedSignals && directionalMargin < 0.75) {
+    sentiment = "Neutral";
+  }
+  if (disagreement && margin < 0.24) sentiment = "Neutral";
+
+  let confidence = 0.43 + top[1] * 0.24 + margin * 0.28 + Math.min(signalStrength, 4) * 0.07 + qualityBoost - shortTextPenalty;
+  if (mixedSignals) confidence -= 0.16;
+  if (disagreement) confidence -= 0.1;
+  if (combined.reversalSignals) confidence -= 0.03;
+  if (mixedSignals) confidence = Math.min(confidence, 0.74);
+  if (sentiment === "Neutral" && directionalSignals === 0) confidence = Math.min(confidence, 0.68);
+  confidence = clamp(confidence, 0.38, textParts.body ? 0.92 : 0.84);
+
+  return {
+    available: true,
+    sentiment,
+    confidence,
+    method: "nlp_abstract",
+    reasoning: `Fallback finance-aware NLP over ${textParts.abstract ? "headline and abstract" : "headline"}.`,
+    debug: {
+      probabilities,
+      margin: Number(margin.toFixed(3)),
+      mixedSignals,
+      disagreement,
+      textLength: text.length,
+      textFieldsUsed: textParts.fieldsUsed,
+      positiveSignals: combined.positiveSignals,
+      negativeSignals: combined.negativeSignals,
+      investmentSignals: combined.investmentSignals.slice(0, 8),
+      neutralReason: sentiment === "Neutral" ? getNeutralReason(directionalSignals, mixedSignals, disagreement, signalStrength) : "",
+      reversalSignals: combined.reversalSignals,
+      externalModel: false
+    }
+  };
+}
+
+function scoreFinanceText(text = "", weight = 1) {
+  const normalized = normalizeForSentiment(text);
+  const sentences = splitSentences(normalized);
+  const score = {
+    positive: 0,
+    neutral: 0.28 * weight,
+    negative: 0,
+    positiveSignals: 0,
+    negativeSignals: 0,
+    reversalSignals: 0,
+    investmentSignals: []
+  };
+  if (!normalized.trim()) return score;
+
+  for (const sentence of sentences) {
+    for (const rule of financeSentimentRules) {
+      if (!rule.pattern.test(sentence)) continue;
+      const polarity = resolveRulePolarity(sentence, rule);
+      const value = rule.weight * weight;
+      score[polarity] += value;
+      if (polarity === "positive") score.positiveSignals += 1;
+      if (polarity === "negative") score.negativeSignals += 1;
+      if (polarity !== rule.polarity) score.reversalSignals += 1;
+      if (polarity !== "neutral") {
+        score.investmentSignals.push({
+          label: rule.label,
+          category: rule.category,
+          sentiment: titleCase(polarity),
+          strength: Number(value.toFixed(2))
+        });
+      }
+    }
+    if (hasAny(sentence, mixedSignalPhrases)) {
+      score.neutral += 0.45 * weight;
+      score.positive += 0.25 * weight;
+      score.negative += 0.25 * weight;
+    }
+  }
+
+  if (score.positiveSignals + score.negativeSignals === 0) score.neutral += 0.7 * weight;
+  return score;
+}
+
+const financeSentimentRules = [
+  { polarity: "positive", category: "Earnings", label: "earnings beat", weight: 2.1, pattern: /\b(earnings|eps|profit|results).{0,45}\b(beat|beats|topped|tops|above|exceeded|better than expected)\b|\b(beat|beats|topped|tops|exceeded).{0,45}\b(estimates?|expectations?|consensus)\b/ },
+  { polarity: "positive", category: "Guidance", label: "raised guidance", weight: 2.25, pattern: /\b(raises?|raised|boosts?|hikes?|lifts?|increases?).{0,35}\b(guidance|outlook|forecast|revenue forecast|profit forecast)\b|\b(guidance|outlook|forecast).{0,35}\b(raised|higher|above)\b/ },
+  { polarity: "positive", category: "Revenue", label: "revenue or profit growth", weight: 1.45, pattern: /\b(revenue|sales|profit|earnings|margin|cash flow).{0,35}\b(rose|rises|grew|growth|increased|improved|expanded|strong|record)\b|\b(record|strong).{0,25}\b(revenue|sales|profit|cash flow|demand)\b/ },
+  { polarity: "positive", category: "Analyst", label: "analyst upgrade", weight: 1.9, pattern: /\b(upgrades?|upgraded|raises? price target|price target raised|initiates? at buy|outperform|overweight)\b/ },
+  { polarity: "positive", category: "Product", label: "demand or approval strength", weight: 1.55, pattern: /\b(approval|approved|clearance|cleared|strong demand|orders? surge|backlog grows|product demand|customer win|major customer|contract win|partnership)\b/ },
+  { polarity: "positive", category: "Capital Returns", label: "capital return increase", weight: 1.5, pattern: /\b(buyback|share repurchase|dividend).{0,35}\b(increase|raises?|raised|boosts?|expands?|new|additional)\b/ },
+  { polarity: "positive", category: "Legal", label: "risk reduced", weight: 1.35, pattern: /\b(loss(?:es)? narrowed|concerns eased|lawsuit dismissed|case dismissed|settlement reached|margin improved|cash flow improved|probe closed|charges dismissed)\b/ },
+  { polarity: "negative", category: "Earnings", label: "earnings miss", weight: 2.1, pattern: /\b(earnings|eps|profit|results|revenue|sales).{0,45}\b(miss|misses|missed|below|short of|weaker than expected)\b|\b(miss|misses|missed).{0,45}\b(estimates?|expectations?|consensus)\b/ },
+  { polarity: "negative", category: "Guidance", label: "lowered guidance", weight: 2.35, pattern: /\b(cuts?|cut|lowers?|lowered|slashes?|reduced|trims?).{0,35}\b(guidance|outlook|forecast|revenue forecast|profit forecast)\b|\b(guidance|outlook|forecast).{0,35}\b(cut|lowered|below|weak)\b/ },
+  { polarity: "negative", category: "Margins", label: "margin or demand pressure", weight: 1.75, pattern: /\b(margin pressure|margins? weaken|profit pressure|demand weakness|weak demand|sales decline|revenue decline|slowing growth|loss widens|cash burn)\b/ },
+  { polarity: "negative", category: "Analyst", label: "analyst downgrade", weight: 1.9, pattern: /\b(downgrades?|downgraded|cuts? price target|price target cut|initiates? at sell|underperform|underweight)\b/ },
+  { polarity: "negative", category: "Legal", label: "legal or regulatory risk", weight: 1.7, pattern: /\b(lawsuit|sues|probe|investigation|antitrust|regulatory scrutiny|sec investigation|doj probe|ftc probe|recall|export control|export restriction|ban|blocked)\b/ },
+  { polarity: "negative", category: "Product", label: "product or execution problem", weight: 1.55, pattern: /\b(product delay|delays? launch|production cut|shipment delay|recall|defect|outage|safety issue|customer loss|loses? contract|market share loss)\b/ },
+  { polarity: "negative", category: "Management", label: "management or financial stress", weight: 1.45, pattern: /\b(ceo resigns|cfo resigns|management shakeup|layoffs?|bankruptcy|default|going concern|liquidity crunch)\b/ },
+  { polarity: "negative", category: "Mixed", label: "mixed beat with weaker outlook", weight: 1.25, pattern: /\b(stock falls after strong earnings|beat estimates but cut guidance|revenue rose despite margin pressure|strong earnings but weak guidance|profit beat but sales missed)\b/ },
+  { polarity: "neutral", category: "Routine", label: "routine corporate update", weight: 0.55, pattern: /\b(announces?|reports?|scheduled|files?|launches?|names?|appoints?|conference|presentation|annual meeting|quarterly report)\b/ }
+];
+
+const negationPhrases = ["not", "no", "without", "less", "fewer", "missed by less", "fails to", "failed to"];
+const positiveReversalPhrases = ["dismissed", "eased", "narrowed", "resolved", "cleared", "settled"];
+const mixedSignalPhrases = ["but", "despite", "although", "however", "while", "even as", "offset by"];
+
+function resolveRulePolarity(sentence, rule) {
+  if (rule.polarity === "neutral") return "neutral";
+  const hasNegation = negationPhrases.some((phrase) => sentence.includes(` ${phrase} `));
+  if (rule.polarity === "negative" && positiveReversalPhrases.some((phrase) => sentence.includes(phrase))) {
+    return "positive";
+  }
+  if (hasNegation) return rule.polarity === "positive" ? "negative" : "positive";
+  return rule.polarity;
+}
+
+function mergeSentimentScores(scores) {
+  return scores.reduce(
+    (acc, score) => ({
+      positive: acc.positive + score.positive,
+      neutral: acc.neutral + score.neutral,
+      negative: acc.negative + score.negative,
+      positiveSignals: acc.positiveSignals + score.positiveSignals,
+      negativeSignals: acc.negativeSignals + score.negativeSignals,
+      reversalSignals: acc.reversalSignals + score.reversalSignals,
+      investmentSignals: [...acc.investmentSignals, ...score.investmentSignals]
+    }),
+    { positive: 0, neutral: 0, negative: 0, positiveSignals: 0, negativeSignals: 0, reversalSignals: 0, investmentSignals: [] }
+  );
+}
+
+function scoresToProbabilities(score) {
+  const positive = score.positive + 0.35;
+  const negative = score.negative + 0.35;
+  const neutral = score.neutral + Math.max(0, 0.55 - Math.abs(positive - negative) * 0.18);
+  const values = { Positive: positive, Neutral: neutral, Negative: negative };
+  const max = Math.max(values.Positive, values.Neutral, values.Negative);
+  const exp = {
+    Positive: Math.exp(values.Positive - max),
+    Neutral: Math.exp(values.Neutral - max),
+    Negative: Math.exp(values.Negative - max)
+  };
+  const total = exp.Positive + exp.Neutral + exp.Negative;
+  return {
+    Positive: Number((exp.Positive / total).toFixed(3)),
+    Neutral: Number((exp.Neutral / total).toFixed(3)),
+    Negative: Number((exp.Negative / total).toFixed(3))
+  };
+}
+
+function hasDirectionalDisagreement(headlineScore, bodyScore) {
+  if (!bodyScore || bodyScore.positiveSignals + bodyScore.negativeSignals === 0) return false;
+  const headlineDirection = headlineScore.positive - headlineScore.negative;
+  const bodyDirection = bodyScore.positive - bodyScore.negative;
+  return Math.abs(headlineDirection) > 0.7 && Math.abs(bodyDirection) > 0.7 && Math.sign(headlineDirection) !== Math.sign(bodyDirection);
+}
+
+function getNeutralReason(directionalSignals, mixedSignals, disagreement, signalStrength) {
+  if (!directionalSignals) return "No material investment-direction signal was detected.";
+  if (mixedSignals) return "Positive and negative investment signals are close.";
+  if (disagreement) return "Headline and body investment signals disagree.";
+  if (signalStrength < 1.15) return "Investment signal is too weak to classify directionally.";
+  return "No dominant investment direction after confidence calibration.";
+}
+
+function providerSentimentResult(providerSentiment, providerScore) {
+  const normalizedProvider = String(providerSentiment || "").toLowerCase();
+  if (normalizedProvider.includes("bullish") || normalizedProvider.includes("positive")) {
+    return sentimentResult("Positive", 0.64, "Provider sentiment maps clearly to positive.", "provider_sentiment");
+  }
+  if (normalizedProvider.includes("bearish") || normalizedProvider.includes("negative")) {
+    return sentimentResult("Negative", 0.64, "Provider sentiment maps clearly to negative.", "provider_sentiment");
+  }
+  if (Number.isFinite(providerScore) && Math.abs(providerScore) > 0.05) {
+    return sentimentResult(providerScore > 0 ? "Positive" : "Negative", 0.58, "Provider sentiment score is directional but uncertain.", "provider_sentiment");
+  }
+  return null;
+}
+
+function keywordFallbackSentiment(text) {
+  const lower = text.toLowerCase();
+  const positive = countMatches(lower, ["beat", "tops estimates", "above estimates", "raises", "record", "growth", "partnership", "approval", "upgrade", "buyback", "dividend"]);
+  const negative = countMatches(lower, ["miss", "cuts", "lawsuit", "probe", "investigation", "recall", "downgrade", "loss", "decline", "warning", "export control", "regulatory"]);
+  const score = positive - negative;
+  if (score > 0) return sentimentResult("Positive", Math.min(0.72, 0.5 + score * 0.06), "Keyword fallback found more positive finance terms.", "keyword_fallback");
+  if (score < 0) return sentimentResult("Negative", Math.min(0.72, 0.5 + Math.abs(score) * 0.06), "Keyword fallback found more negative finance terms.", "keyword_fallback");
+  return sentimentResult("Neutral", 0.48, "Fallback found no strong directional finance terms.", "keyword_fallback");
+}
+
+function sentimentResult(sentiment, confidence, reasoning, method = "keyword_fallback") {
+  return {
+    sentiment,
+    confidence,
+    reasoning,
+    method,
+    debug: {
+      probabilities: null,
+      margin: null,
+      mixedSignals: false,
+      disagreement: false,
+      investmentSignals: [],
+      neutralReason: sentiment === "Neutral" ? "Provider or fallback signal was not materially directional." : ""
+    }
+  };
 }
 
 function classifyTopic(text) {
@@ -1206,14 +1403,15 @@ function buildInvestmentAnalysis(items) {
   const company = state.selectedCompany ? state.selectedCompany.symbol : "the selected company";
   const sourceCount = new Set(items.map((item) => item.source)).size;
   const confidence = getAnalysisConfidence(items, counts, sourceCount);
+  const narrative = getInvestmentNarrative(items, counts);
   const dominantNarrative = topics.length
     ? `${topics.slice(0, 3).join(", ")} coverage`
     : "general company news";
 
   return {
     summary:
-      `${company} news flow over ${state.range} is ${overall.toLowerCase()} because ${overall.toLowerCase()} is the largest visible sentiment category. ` +
-      `The dominant narrative is ${dominantNarrative}, based on ${items.length} reputable article${items.length === 1 ? "" : "s"} from ${sourceCount} source${sourceCount === 1 ? "" : "s"}. ` +
+      `${company} news flow over ${state.range} looks ${narrative.label} for investors: ${narrative.reason} ` +
+      `The dominant coverage area is ${dominantNarrative}, based on ${items.length} relevance-filtered article${items.length === 1 ? "" : "s"} from ${sourceCount} source${sourceCount === 1 ? "" : "s"}. ` +
       `Analysis confidence is ${confidence.label}: ${confidence.reason}`,
     positives: buildDriverList(items, "Positive", "positive driver"),
     risks: buildDriverList(items, "Negative", "risk or negative driver"),
@@ -1225,57 +1423,129 @@ function buildInvestmentAnalysis(items) {
 function buildDriverList(items, sentiment, emptyLabel) {
   const matching = items.filter((item) => item.sentiment === sentiment);
   if (!matching.length) return [`No ${emptyLabel} is clearly supported by the current filtered articles.`];
-  return topTopics(matching)
+  return matching
+    .slice()
+    .sort((a, b) => b.confidence - a.confidence)
     .slice(0, 4)
-    .map((topic) => {
-      const article = matching.find((item) => item.topic === topic);
-      return `${topic}: supported by "${truncate(article.headline, 92)}" (${article.source}).`;
+    .map((article) => {
+      const signal = getTopInvestmentSignal(article, sentiment);
+      return `${article.topic}: ${signal} is the investment signal from "${truncate(article.headline, 92)}" (${article.source}).`;
     });
 }
 
 function buildMixedSignals(items) {
   const neutral = items.filter((item) => item.sentiment === "Neutral");
   const labels = new Set(items.map((item) => item.sentiment));
+  const mixedByModel = items.filter((item) => item.sentimentDebug?.mixedSignals || item.sentimentDebug?.disagreement);
   const signals = [];
   if (neutral.length) {
     const example = neutral[0];
-    signals.push(`${neutral.length} neutral article${neutral.length === 1 ? "" : "s"} suggest the news flow is not strongly directional; for example, "${truncate(example.headline, 92)}" (${example.source}).`);
+    const reason = example.sentimentDebug?.neutralReason || "the article appears routine, mixed, or low impact";
+    signals.push(`${neutral.length} neutral article${neutral.length === 1 ? "" : "s"} appear routine or mixed; for example, "${truncate(example.headline, 92)}" is neutral because ${reason.toLowerCase()}`);
+  }
+  if (mixedByModel.length) {
+    const example = mixedByModel[0];
+    signals.push(`The sentiment model found mixed or conflicting article context in ${mixedByModel.length} item${mixedByModel.length === 1 ? "" : "s"}, including "${truncate(example.headline, 92)}" (${example.source}).`);
   }
   if (labels.has("Positive") && labels.has("Negative")) {
     signals.push("Positive and negative items coexist, so the filtered set should be read as mixed rather than one-sided.");
   }
-  if (!signals.length) signals.push("The current filtered set is directionally consistent, with limited conflicting evidence in the available headlines and snippets.");
+  if (!signals.length) signals.push("The current filtered set is directionally consistent, with limited conflicting evidence in the available article context.");
   return signals;
 }
 
 function buildEventList(items, confidence) {
   const catalystTopics = ["Earnings", "Guidance", "Regulation", "Legal", "Product", "Management", "Analyst", "M&A"];
   const catalysts = items.filter((item) => catalystTopics.includes(item.topic));
-  const selected = (catalysts.length ? catalysts : items).slice(0, 4);
+  const selected = (catalysts.length ? catalysts : items)
+    .slice()
+    .sort((a, b) => getSignalStrength(b) - getSignalStrength(a) || b.confidence - a.confidence)
+    .slice(0, 4);
   const attention = inferInvestorAttention(items);
   return [
-    ...selected.map((item) => `${item.topic}: watch follow-through from "${truncate(item.headline, 90)}" (${item.source}).`),
+    ...selected.map((item) => `${item.topic}: watch whether ${getTopInvestmentSignal(item, item.sentiment).toLowerCase()} continues to affect the ${item.sentiment.toLowerCase()} narrative (${item.source}).`),
     `Investor attention: ${attention}`,
     `Confidence: ${confidence.label}.`
   ];
 }
 
+function getInvestmentNarrative(items, counts) {
+  const total = items.length || 1;
+  const positiveWeight = items.filter((item) => item.sentiment === "Positive").reduce((sum, item) => sum + item.confidence, 0);
+  const negativeWeight = items.filter((item) => item.sentiment === "Negative").reduce((sum, item) => sum + item.confidence, 0);
+  const neutralShare = counts.Neutral / total;
+  const posSignals = topInvestmentSignals(items, "Positive");
+  const negSignals = topInvestmentSignals(items, "Negative");
+
+  if (positiveWeight > negativeWeight * 1.25 && counts.Positive >= Math.max(1, counts.Negative)) {
+    return {
+      label: "broadly supportive",
+      reason: posSignals.length ? `positive investment signals such as ${posSignals.slice(0, 2).join(" and ")} outweigh current risks.` : "positive investment signals outweigh current risks."
+    };
+  }
+  if (negativeWeight > positiveWeight * 1.25 && counts.Negative >= Math.max(1, counts.Positive)) {
+    return {
+      label: "cautious to negative",
+      reason: negSignals.length ? `risks such as ${negSignals.slice(0, 2).join(" and ")} outweigh supportive signals.` : "negative investment signals outweigh supportive signals."
+    };
+  }
+  if (neutralShare >= 0.65) {
+    const thin = items.filter((item) => item.sentimentTextFieldsUsed !== "headline_abstract_and_body").length / total > 0.6;
+    return {
+      label: "mostly neutral",
+      reason: thin ? "most available items lack enough public article context or clear company-specific investment signals." : "the current articles are mostly routine, factual, or balanced without a dominant investment direction."
+    };
+  }
+  return {
+    label: "mixed",
+    reason: "supportive and risky investment signals coexist without a clear dominant direction."
+  };
+}
+
+function topInvestmentSignals(items, sentiment) {
+  const counts = new Map();
+  items
+    .flatMap((item) => item.sentimentDebug?.investmentSignals || [])
+    .filter((signal) => signal.sentiment === sentiment)
+    .forEach((signal) => counts.set(signal.label, (counts.get(signal.label) || 0) + signal.strength));
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([label]) => label);
+}
+
+function getTopInvestmentSignal(article, sentiment) {
+  const signals = (article.sentimentDebug?.investmentSignals || [])
+    .filter((signal) => signal.sentiment === sentiment)
+    .sort((a, b) => b.strength - a.strength);
+  if (signals[0]) return signals[0].label;
+  if (article.sentimentDebug?.neutralReason) return article.sentimentDebug.neutralReason;
+  return article.reasoning || "company-specific news flow";
+}
+
+function getSignalStrength(article) {
+  return (article.sentimentDebug?.investmentSignals || []).reduce((max, signal) => Math.max(max, signal.strength || 0), 0);
+}
+
 function inferInvestorAttention(items) {
   const topics = new Set(items.map((item) => item.topic));
-  if (topics.has("Earnings") || topics.has("Guidance")) return "likely earnings and estimate-revision focused.";
-  if (topics.has("Regulation") || topics.has("Legal")) return "likely risk-management and policy focused.";
-  if (topics.has("Product") || topics.has("Competition")) return "likely growth, product-cycle, and competitive-position focused.";
-  if (topics.has("Analyst")) return "likely valuation and analyst-expectation focused.";
+  const context = items.map((item) => item.analysisContext || `${item.headline} ${item.summary}`).join(" ").toLowerCase();
+  if (topics.has("Earnings") || topics.has("Guidance") || hasAny(context, ["earnings", "guidance", "forecast", "estimate"])) return "likely earnings and estimate-revision focused.";
+  if (topics.has("Regulation") || topics.has("Legal") || hasAny(context, ["regulation", "lawsuit", "court", "probe", "investigation"])) return "likely risk-management and policy focused.";
+  if (topics.has("Product") || topics.has("Competition") || hasAny(context, ["product", "launch", "market share", "competition", "rival"])) return "likely growth, product-cycle, and competitive-position focused.";
+  if (topics.has("Analyst") || hasAny(context, ["upgrade", "downgrade", "price target", "rating"])) return "likely valuation and analyst-expectation focused.";
   return "likely broad headline-monitoring rather than a single catalyst.";
 }
 
 function getAnalysisConfidence(items, counts, sourceCount) {
   const top = Math.max(counts.Positive, counts.Neutral, counts.Negative);
   const consistency = top / items.length;
-  if (items.length >= 20 && sourceCount >= 5 && consistency >= 0.55) {
+  const bodyCoverage = items.filter((item) => item.sentimentTextFieldsUsed === "headline_abstract_and_body").length / items.length;
+  const modelCoverage = items.filter((item) => String(item.sentimentMethod || "").startsWith("nlp")).length / items.length;
+  const coverageIsThin = bodyCoverage < 0.25 || modelCoverage < 0.8;
+  if (items.length >= 20 && sourceCount >= 5 && consistency >= 0.55 && !coverageIsThin) {
     return { label: "high", reason: "article count, source breadth, and sentiment consistency are all strong." };
   }
-  if (items.length >= 8 && sourceCount >= 3) {
+  if (items.length >= 8 && sourceCount >= 3 && modelCoverage >= 0.8) {
     return { label: "medium", reason: "there is enough reputable coverage for a directional read, but some signals may still be incomplete." };
   }
   return { label: "low", reason: "the filtered article set is thin or concentrated in too few sources." };
@@ -1348,9 +1618,24 @@ function cleanText(value = "") {
   return parser.parseFromString(String(value), "text/html").documentElement.textContent.trim();
 }
 
+function normalizeForSentiment(value = "") {
+  return ` ${cleanText(value).toLowerCase().replace(/[^\w$%. -]+/g, " ").replace(/\s+/g, " ")} `;
+}
+
+function splitSentences(value = "") {
+  return value
+    .split(/(?<=[.!?])\s+|\s+[;:]\s+/)
+    .map((sentence) => ` ${sentence.trim()} `)
+    .filter((sentence) => sentence.trim());
+}
+
 function truncate(value, max) {
   if (!value) return "";
   return value.length > max ? `${value.slice(0, max - 1).trim()}...` : value;
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function countMatches(text, terms) {
