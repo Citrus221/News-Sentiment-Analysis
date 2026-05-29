@@ -1030,17 +1030,26 @@ function renderSummary(items) {
 }
 
 function renderBreakdown(items) {
-  const counts = countSentiments(items);
-  const total = items.length || 1;
-  document.querySelector("#breakdown").innerHTML = ["Positive", "Neutral", "Negative"]
+  const safeItems = Array.isArray(items) ? items : [];
+  const hasItems = safeItems.length > 0;
+  const counts = countSentiments(safeItems);
+  const total = hasItems ? safeItems.length : 1;
+  const breakdown = document.querySelector("#breakdown");
+  breakdown.classList.toggle("empty", !hasItems);
+  breakdown.innerHTML =
+    (!hasItems
+      ? `<p class="breakdown-note">${getEmptyNewsMessage()}</p>`
+      : "") +
+    ["Positive", "Neutral", "Negative"]
     .map((label) => {
       const percent = Math.round((counts[label] / total) * 100);
+      const width = hasItems ? percent : 0;
       return `
         <div class="breakdown-item">
           <span class="card-label">${label}</span>
-          <strong>${items.length ? percent : 0}%</strong>
+          <strong>${hasItems ? percent : 0}%</strong>
           <span class="cell-label">${counts[label]} article${counts[label] === 1 ? "" : "s"}</span>
-          <div class="meter"><span style="width:${items.length ? percent : 0}%;background:${sentimentColors[label]}"></span></div>
+          <div class="meter"><span style="width:${width}%;background:${sentimentColors[label]}"></span></div>
         </div>
       `;
     })

@@ -112,11 +112,13 @@ globalThis.__logic = {
   validArticle,
   normalizeTopic,
   isWithinRange,
+  renderBreakdown,
   getApiCandidates,
   hasBackendApi,
   getMissingProviderMessage
 };`;
   vm.runInNewContext(source, context, { filename: appPath });
+  context.__logic.__nodes = nodes;
   return context.__logic;
 }
 
@@ -199,6 +201,15 @@ assert.strictEqual(
   false,
   "foreign ticker suffixes should not match the selected base ticker"
 );
+
+state.topicSelection.clear();
+state.topicSelection.add("Legal");
+logic.renderBreakdown(logic.getFilteredArticles());
+const emptyBreakdown = logic.__nodes.get("#breakdown").innerHTML;
+assert.match(emptyBreakdown, /No articles match the current topic filters/, "empty topic filters should explain the empty breakdown");
+assert.match(emptyBreakdown, /Positive/, "empty topic filters should still render the positive bucket");
+assert.match(emptyBreakdown, /Neutral/, "empty topic filters should still render the neutral bucket");
+assert.match(emptyBreakdown, /Negative/, "empty topic filters should still render the negative bucket");
 
 const future = article({ publishedAt: new Date(Date.now() + 86400000).toISOString() });
 assert.strictEqual(logic.validArticle(future), false, "future publish times should not be accepted");
