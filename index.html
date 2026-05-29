@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>News Sentiment Analysis Dashboard</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Investment research workspace</p>
+          <h1>News Sentiment Analysis Dashboard</h1>
+        </div>
+        <div class="disclaimer">This tool is for research only and is not financial advice.</div>
+      </header>
+
+      <section class="control-band" aria-label="Search">
+        <form class="search-panel" id="searchForm">
+          <label for="searchInput">Company or ticker</label>
+          <div class="search-row">
+            <input
+              id="searchInput"
+              type="search"
+              autocomplete="off"
+              placeholder="Search ticker or company name"
+            />
+          </div>
+          <div class="suggestions" id="suggestions" role="listbox" aria-label="Company suggestions"></div>
+          <p class="data-note" id="dataNote">
+            Search resolves symbols from a refreshable U.S. market symbol directory. News is limited to reputable source-linked articles.
+          </p>
+          <div class="provider-actions">
+            <button type="button" class="text-button" id="refreshSymbols">Refresh symbol directory</button>
+          </div>
+        </form>
+
+        <section class="compact-summary" id="activeTarget" aria-live="polite">
+          <div class="company-summary">
+            <span class="card-label">Selected company</span>
+            <strong id="targetName">No company selected</strong>
+            <p id="targetMeta">Search by ticker, full company name, or partial company name to begin.</p>
+          </div>
+          <div class="summary-stat">
+            <span class="card-label">Overall sentiment</span>
+            <strong id="overallLabel">No Search</strong>
+            <p id="overallReason">Search by ticker, company name, or partial company name to begin.</p>
+          </div>
+          <div class="summary-stat compact">
+            <span class="card-label">Articles</span>
+            <strong id="summaryArticleCount">0</strong>
+            <p><span id="summaryRange">30d</span> · <span id="overallConfidence">0% avg confidence</span></p>
+          </div>
+        </section>
+      </section>
+
+      <section class="workspace">
+        <div class="main-column">
+          <section class="panel analytics-panel">
+            <div class="panel-header">
+              <div>
+                <h2>Sentiment Breakdown</h2>
+                <p>Percent of filtered news items by label</p>
+              </div>
+              <span class="asof" id="asOf">As of May 28, 2026</span>
+            </div>
+            <div class="breakdown" id="breakdown"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Traceable News Analysis</h2>
+                <p id="resultMeta">Only articles with valid source, publish time, and URL are shown.</p>
+              </div>
+              <div class="legend">
+                <span><i class="dot positive"></i>Positive</span>
+                <span><i class="dot neutral"></i>Neutral</span>
+                <span><i class="dot negative"></i>Negative</span>
+              </div>
+            </div>
+            <div class="news-controls">
+              <div>
+                <span class="filter-label">Time range</span>
+                <div class="segmented" id="rangeFilters" role="group" aria-label="Time range">
+                  <button type="button" data-range="24h" aria-pressed="false">24h</button>
+                  <button type="button" data-range="7d" aria-pressed="false">7d</button>
+                  <button type="button" data-range="30d" class="active" aria-pressed="true">30d</button>
+                  <button type="button" data-range="90d" aria-pressed="false">90d</button>
+                </div>
+              </div>
+              <div>
+                <span class="filter-label">Topics</span>
+                <div class="topic-grid" id="topicFilters"></div>
+              </div>
+            </div>
+            <div class="news-list" id="newsList"></div>
+            <div class="pagination" id="pagination" aria-label="News pagination"></div>
+          </section>
+        </div>
+
+        <aside class="insight-panel">
+          <div class="panel-header compact">
+            <div>
+              <h2>AI Analysis</h2>
+              <p>Generated from the current filtered news set</p>
+            </div>
+          </div>
+          <div class="insight-section">
+            <h3>Overall summary</h3>
+            <p id="analysisSummary"></p>
+          </div>
+          <div class="insight-section">
+            <h3>Key positive themes</h3>
+            <ul id="positiveThemes"></ul>
+          </div>
+          <div class="insight-section">
+            <h3>Key negative themes</h3>
+            <ul id="negativeThemes"></ul>
+          </div>
+          <div class="insight-section">
+            <h3>Neutral or mixed signals</h3>
+            <ul id="contradictions"></ul>
+          </div>
+          <div class="insight-section">
+            <h3>Key events and narratives</h3>
+            <ul id="watchNext"></ul>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
