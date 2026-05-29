@@ -950,22 +950,26 @@ function renderDashboard() {
   renderInsights(filtered);
   renderDataNote();
   syncInsightPanelHeight();
+  window.setTimeout?.(syncInsightPanelHeight, 0);
 }
 
 function syncInsightPanelHeight() {
   const schedule = typeof window.requestAnimationFrame === "function" ? window.requestAnimationFrame.bind(window) : (callback) => callback();
   schedule(() => {
     const mainColumn = document.querySelector(".main-column");
+    const insightPanel = document.querySelector(".insight-panel");
     const workspace = document.querySelector(".workspace");
-    if (!mainColumn || !workspace) return;
-    if (typeof mainColumn.getBoundingClientRect !== "function" || !workspace.style) return;
+    if (!mainColumn || !insightPanel || !workspace) return;
+    if (typeof mainColumn.getBoundingClientRect !== "function" || typeof insightPanel.getBoundingClientRect !== "function" || !workspace.style) return;
 
     if (typeof window.matchMedia === "function" && window.matchMedia("(max-width: 1120px)").matches) {
       workspace.style.removeProperty("--insight-panel-height");
       return;
     }
 
-    const height = Math.ceil(mainColumn.getBoundingClientRect().height);
+    const mainRect = mainColumn.getBoundingClientRect();
+    const insightRect = insightPanel.getBoundingClientRect();
+    const height = Math.max(0, Math.ceil(mainRect.bottom - insightRect.top));
     workspace.style.setProperty("--insight-panel-height", `${height}px`);
   });
 }
