@@ -39,7 +39,7 @@ class MockNode {
   }
 }
 
-function loadAppLogic() {
+function loadAppLogic(location = { href: "http://localhost/", protocol: "http:", hostname: "localhost", search: "" }) {
   const nodes = new Map();
   const getNode = (selector) => {
     if (!nodes.has(selector)) nodes.set(selector, new MockNode());
@@ -75,7 +75,7 @@ function loadAppLogic() {
       addEventListener() {}
     },
     window: {
-      location: { href: "http://localhost/", protocol: "http:", search: "" },
+      location,
       history: { replaceState() {} }
     },
     localStorage: {
@@ -107,7 +107,10 @@ globalThis.__logic = {
   getArticleRelevance,
   validArticle,
   normalizeTopic,
-  isWithinRange
+  isWithinRange,
+  getApiCandidates,
+  hasBackendApi,
+  getMissingProviderMessage
 };`;
   vm.runInNewContext(source, context, { filename: appPath });
   return context.__logic;
@@ -195,5 +198,19 @@ assert.strictEqual(
 
 const future = article({ publishedAt: new Date(Date.now() + 86400000).toISOString() });
 assert.strictEqual(logic.validArticle(future), false, "future publish times should not be accepted");
+
+const staticLogic = loadAppLogic({
+  href: "https://example.github.io/News-Sentiment/",
+  protocol: "https:",
+  hostname: "example.github.io",
+  search: ""
+});
+assert.strictEqual(staticLogic.getApiCandidates("/api/news").length, 0, "static production pages must not call missing API routes");
+assert.strictEqual(staticLogic.hasBackendApi(), false, "GitHub Pages should not be treated as a backend host");
+assert.match(
+  staticLogic.getMissingProviderMessage({ symbol: "AAPL" }),
+  /GitHub Pages deployment is static-only/,
+  "static production errors should explain the missing backend setup"
+);
 
 console.log("logic tests passed");
