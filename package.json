@@ -1,0 +1,15 @@
+{
+  "name": "news-sentiment-analysis",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Static news sentiment frontend with an optional Node API provider.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node tests/logic.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}

@@ -71,6 +71,13 @@ http
         return res.end();
       }
       const url = new URL(req.url, `http://${req.headers.host}`);
+      if (url.pathname === "/api/health") {
+        return sendJson(res, {
+          ok: true,
+          providers: getConfiguredProviders(),
+          hasFinbert: Boolean(finbertApiUrl)
+        });
+      }
       if (url.pathname === "/api/symbols") {
         return sendJson(res, await getSymbols());
       }
@@ -90,6 +97,15 @@ function applyCorsHeaders(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
+function getConfiguredProviders() {
+  return {
+    polygon: Boolean(process.env.POLYGON_API_KEY),
+    fmp: Boolean(process.env.FMP_API_KEY),
+    alphaVantage: Boolean(process.env.ALPHAVANTAGE_API_KEY),
+    noKeyRss: true
+  };
 }
 
 async function getSymbols() {
@@ -118,7 +134,35 @@ async function getNews(params) {
   const cutoff = getRangeCutoff(range);
   if (!symbol) throw statusError("Missing symbol.", 400);
 
+  const providerAttempts = [];
   if (process.env.POLYGON_API_KEY) {
+    providerAttempts.push(() => fetchPolygonProviderNews(symbol, companyName, cutoff));
+  }
+  if (process.env.FMP_API_KEY) {
+    providerAttempts.push(() => fetchFmpProviderNews(symbol, companyName, cutoff));
+  }
+  if (process.env.ALPHAVANTAGE_API_KEY) {
+    providerAttempts.push(() => fetchAlphaVantageProviderNews(symbol, companyName, cutoff));
+  }
+  providerAttempts.push(() => fetchNoKeyNews(symbol, companyName, cutoff));
+
+  const errors = [];
+  for (const attempt of providerAttempts) {
+    try {
+      const articles = await attempt();
+      if (articles.length) return articles;
+    } catch (error) {
+      errors.push(error.message);
+    }
+  }
+
+  throw statusError(
+    `No recent reputable news was found for ${symbol}. Provider attempts: ${errors.join(" | ") || "all providers returned no articles."}`,
+    404
+  );
+}
+
+async function fetchPolygonProviderNews(symbol, companyName, cutoff) {
     const apiParams = new URLSearchParams({
       ticker: symbol,
       limit: "100",
@@ -144,9 +188,9 @@ async function getNews(params) {
       companyName,
       cutoff
     );
-  }
+}
 
-  if (process.env.FMP_API_KEY) {
+async function fetchFmpProviderNews(symbol, companyName, cutoff) {
     const today = new Date().toISOString().slice(0, 10);
     const apiParams = new URLSearchParams({
       tickers: symbol,
@@ -170,9 +214,9 @@ async function getNews(params) {
       companyName,
       cutoff
     );
-  }
+}
 
-  if (process.env.ALPHAVANTAGE_API_KEY) {
+async function fetchAlphaVantageProviderNews(symbol, companyName, cutoff) {
     const apiParams = new URLSearchParams({
       function: "NEWS_SENTIMENT",
       tickers: symbol,
@@ -198,9 +242,6 @@ async function getNews(params) {
       companyName,
       cutoff
     );
-  }
-
-  return fetchNoKeyNews(symbol, companyName, cutoff);
 }
 
 async function fetchNoKeyNews(symbol, companyName, cutoff) {
