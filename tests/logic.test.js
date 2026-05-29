@@ -39,7 +39,10 @@ class MockNode {
   }
 }
 
-function loadAppLogic(location = { href: "http://localhost/", protocol: "http:", hostname: "localhost", search: "" }) {
+function loadAppLogic(
+  location = { href: "http://localhost/", protocol: "http:", hostname: "localhost", search: "" },
+  appConfig = {}
+) {
   const nodes = new Map();
   const getNode = (selector) => {
     if (!nodes.has(selector)) nodes.set(selector, new MockNode());
@@ -76,6 +79,7 @@ function loadAppLogic(location = { href: "http://localhost/", protocol: "http:",
     },
     window: {
       location,
+      NEWS_SENTIMENT_CONFIG: appConfig,
       history: { replaceState() {} }
     },
     localStorage: {
@@ -211,6 +215,23 @@ assert.match(
   staticLogic.getMissingProviderMessage({ symbol: "AAPL" }),
   /GitHub Pages deployment is static-only/,
   "static production errors should explain the missing backend setup"
+);
+
+const configuredApiLogic = loadAppLogic(
+  {
+    href: "https://example.github.io/News-Sentiment/",
+    protocol: "https:",
+    hostname: "example.github.io",
+    search: ""
+  },
+  { apiBase: "https://news-sentiment-api.example.com/" }
+);
+const configuredApiCandidates = configuredApiLogic.getApiCandidates("/api/news");
+assert.strictEqual(configuredApiCandidates.length, 1, "configured production pages should have one API candidate");
+assert.strictEqual(
+  configuredApiCandidates[0],
+  "https://news-sentiment-api.example.com/api/news",
+  "static production pages should call the configured deployed API origin"
 );
 
 console.log("logic tests passed");

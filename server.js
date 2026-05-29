@@ -71,6 +71,13 @@ http
         return res.end();
       }
       const url = new URL(req.url, `http://${req.headers.host}`);
+      if (url.pathname === "/api/health") {
+        return sendJson(res, {
+          ok: true,
+          providers: getConfiguredProviders(),
+          hasFinbert: Boolean(finbertApiUrl)
+        });
+      }
       if (url.pathname === "/api/symbols") {
         return sendJson(res, await getSymbols());
       }
@@ -90,6 +97,15 @@ function applyCorsHeaders(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
+function getConfiguredProviders() {
+  return {
+    polygon: Boolean(process.env.POLYGON_API_KEY),
+    fmp: Boolean(process.env.FMP_API_KEY),
+    alphaVantage: Boolean(process.env.ALPHAVANTAGE_API_KEY),
+    noKeyRss: true
+  };
 }
 
 async function getSymbols() {

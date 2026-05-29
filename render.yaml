@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: news-sentiment-api
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: POLYGON_API_KEY
+        sync: false
+      - key: FMP_API_KEY
+        sync: false
+      - key: ALPHAVANTAGE_API_KEY
+        sync: false
+      - key: FINBERT_API_URL
+        sync: false

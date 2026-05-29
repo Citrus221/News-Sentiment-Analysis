@@ -1421,7 +1421,11 @@ function hasBackendApi() {
 }
 
 function getConfiguredApiBase() {
-  const configured = window.NEWS_SENTIMENT_API_BASE || localStorage.getItem(API_BASE_STORAGE_KEY) || "";
+  const configured =
+    window.NEWS_SENTIMENT_API_BASE ||
+    window.NEWS_SENTIMENT_CONFIG?.apiBase ||
+    localStorage.getItem(API_BASE_STORAGE_KEY) ||
+    "";
   return String(configured).trim().replace(/\/+$/, "");
 }
 
