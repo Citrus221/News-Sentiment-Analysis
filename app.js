@@ -212,6 +212,16 @@ function bindEvents() {
   document.addEventListener("click", (event) => {
     if (!event.target.closest(".search-panel")) els.suggestions.classList.remove("open");
   });
+
+  if (typeof window.addEventListener === "function") {
+    window.addEventListener("resize", syncInsightPanelHeight);
+  }
+  if (window.ResizeObserver) {
+    const mainColumn = document.querySelector(".main-column");
+    if (mainColumn) {
+      new ResizeObserver(syncInsightPanelHeight).observe(mainColumn);
+    }
+  }
 }
 
 async function handleAnalyze() {
@@ -939,6 +949,25 @@ function renderDashboard() {
   renderNews(filtered);
   renderInsights(filtered);
   renderDataNote();
+  syncInsightPanelHeight();
+}
+
+function syncInsightPanelHeight() {
+  const schedule = typeof window.requestAnimationFrame === "function" ? window.requestAnimationFrame.bind(window) : (callback) => callback();
+  schedule(() => {
+    const mainColumn = document.querySelector(".main-column");
+    const workspace = document.querySelector(".workspace");
+    if (!mainColumn || !workspace) return;
+    if (typeof mainColumn.getBoundingClientRect !== "function" || !workspace.style) return;
+
+    if (typeof window.matchMedia === "function" && window.matchMedia("(max-width: 1120px)").matches) {
+      workspace.style.removeProperty("--insight-panel-height");
+      return;
+    }
+
+    const height = Math.ceil(mainColumn.getBoundingClientRect().height);
+    workspace.style.setProperty("--insight-panel-height", `${height}px`);
+  });
 }
 
 function resetDashboard({ preserveUrl = false } = {}) {
