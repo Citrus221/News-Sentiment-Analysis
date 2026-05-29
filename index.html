@@ -9,9 +9,12 @@
   <body>
     <main class="app-shell">
       <header class="topbar">
-        <div>
-          <p class="eyebrow">Investment research workspace</p>
-          <h1>News Sentiment Analysis Dashboard</h1>
+        <div class="title-lockup">
+          <span class="title-mark" aria-hidden="true"></span>
+          <div>
+            <p class="eyebrow">Investment research workspace</p>
+            <h1>News Sentiment Analysis Dashboard</h1>
+          </div>
         </div>
         <div class="disclaimer">This tool is for research only and is not financial advice.</div>
       </header>
@@ -26,14 +29,12 @@
               autocomplete="off"
               placeholder="Search ticker or company name"
             />
+            <button type="submit" class="search-submit">Analyze</button>
           </div>
           <div class="suggestions" id="suggestions" role="listbox" aria-label="Company suggestions"></div>
           <p class="data-note" id="dataNote">
             Search resolves symbols from a refreshable U.S. market symbol directory. News is limited to reputable source-linked articles.
           </p>
-          <div class="provider-actions">
-            <button type="button" class="text-button" id="refreshSymbols">Refresh symbol directory</button>
-          </div>
         </form>
 
         <section class="compact-summary" id="activeTarget" aria-live="polite">
@@ -68,7 +69,7 @@
             <div class="breakdown" id="breakdown"></div>
           </section>
 
-          <section class="panel">
+          <section class="panel news-panel">
             <div class="panel-header">
               <div>
                 <h2>Traceable News Analysis</h2>
@@ -81,7 +82,7 @@
               </div>
             </div>
             <div class="news-controls">
-              <div>
+              <div class="filter-group range-group">
                 <span class="filter-label">Time range</span>
                 <div class="segmented" id="rangeFilters" role="group" aria-label="Time range">
                   <button type="button" data-range="24h" aria-pressed="false">24h</button>
@@ -90,7 +91,7 @@
                   <button type="button" data-range="90d" aria-pressed="false">90d</button>
                 </div>
               </div>
-              <div>
+              <div class="filter-group topic-group">
                 <span class="filter-label">Topics</span>
                 <div class="topic-grid" id="topicFilters"></div>
               </div>
@@ -101,31 +102,33 @@
         </div>
 
         <aside class="insight-panel">
-          <div class="panel-header compact">
-            <div>
-              <h2>AI Analysis</h2>
-              <p>Generated from the current filtered news set</p>
+          <div class="insight-scroll">
+            <div class="panel-header compact">
+              <div>
+                <h2>AI Analysis</h2>
+                <p>Generated from the current filtered news set</p>
+              </div>
             </div>
-          </div>
-          <div class="insight-section">
-            <h3>Overall summary</h3>
-            <p id="analysisSummary"></p>
-          </div>
-          <div class="insight-section">
-            <h3>Key positive themes</h3>
-            <ul id="positiveThemes"></ul>
-          </div>
-          <div class="insight-section">
-            <h3>Key negative themes</h3>
-            <ul id="negativeThemes"></ul>
-          </div>
-          <div class="insight-section">
-            <h3>Neutral or mixed signals</h3>
-            <ul id="contradictions"></ul>
-          </div>
-          <div class="insight-section">
-            <h3>Key events and narratives</h3>
-            <ul id="watchNext"></ul>
+            <div class="insight-section">
+              <h3>Overall summary</h3>
+              <p id="analysisSummary"></p>
+            </div>
+            <div class="insight-section">
+              <h3>Key positive themes</h3>
+              <ul id="positiveThemes"></ul>
+            </div>
+            <div class="insight-section">
+              <h3>Key negative themes</h3>
+              <ul id="negativeThemes"></ul>
+            </div>
+            <div class="insight-section">
+              <h3>Neutral or mixed signals</h3>
+              <ul id="contradictions"></ul>
+            </div>
+            <div class="insight-section">
+              <h3>Key events and narratives</h3>
+              <ul id="watchNext"></ul>
+            </div>
           </div>
         </aside>
       </section>

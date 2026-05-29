@@ -2,6 +2,7 @@ const appNow = () => new Date();
 const SYMBOL_CACHE_KEY = "news-sentiment-symbol-master-v1";
 const SYMBOL_CACHE_MS = 24 * 60 * 60 * 1000;
 const ARTICLES_PER_PAGE = 10;
+const MAX_NEWS_RANGE = "90d";
 const NEWS_KEYS = {
   polygon: "POLYGON_API_KEY",
   fmp: "FMP_API_KEY",
@@ -139,7 +140,6 @@ const els = {
   searchForm: document.querySelector("#searchForm"),
   searchInput: document.querySelector("#searchInput"),
   suggestions: document.querySelector("#suggestions"),
-  refreshSymbols: document.querySelector("#refreshSymbols"),
   dataNote: document.querySelector("#dataNote")
 };
 
@@ -185,17 +185,13 @@ function bindEvents() {
     await selectCompany(company);
   });
 
-  els.rangeFilters.addEventListener("click", async (event) => {
+  els.rangeFilters.addEventListener("click", (event) => {
     if (event.target.tagName !== "BUTTON") return;
     if (event.target.dataset.range === state.range) return;
     state.range = event.target.dataset.range;
     state.page = 1;
     updateRangeSelection();
-    if (state.selectedCompany) {
-      await selectCompany(state.selectedCompany, { preserveSearch: true, resetPage: true, clearArticles: true });
-    } else {
-      renderDashboard();
-    }
+    renderDashboard();
   });
 
   els.topicFilters.addEventListener("change", (event) => {
@@ -212,12 +208,6 @@ function bindEvents() {
     renderDashboard();
   });
 
-  els.refreshSymbols.addEventListener("click", async () => {
-    await loadSymbolMaster({ forceRefresh: true });
-    const query = els.searchInput.value.trim();
-    showSuggestions(query ? rankSymbols(query).slice(0, 8) : getPopularSuggestions(), { forceOpen: !query });
-  });
-
   document.addEventListener("click", (event) => {
     if (!event.target.closest(".search-panel")) els.suggestions.classList.remove("open");
   });
@@ -230,7 +220,7 @@ async function handleAnalyze() {
     : "";
 
   if (!query && state.selectedCompany) {
-    await selectCompany(state.selectedCompany, { preserveSearch: true, resetPage: false, clearArticles: false });
+    await selectCompany(state.selectedCompany, { preserveSearch: true, resetPage: false });
     return;
   }
 
@@ -243,7 +233,7 @@ async function handleAnalyze() {
   }
 
   if (state.selectedCompany && (query === selectedDisplay || normalizeSymbol(query) === normalizeSymbol(state.selectedCompany.symbol))) {
-    await selectCompany(state.selectedCompany, { preserveSearch: true, resetPage: false, clearArticles: false });
+    await selectCompany(state.selectedCompany, { preserveSearch: true, resetPage: false });
     return;
   }
 
@@ -394,20 +384,22 @@ async function resolveAndFetch(rawQuery) {
   await selectCompany(matches[0]);
 }
 
-async function selectCompany(company, { preserveSearch = false, resetPage = true, clearArticles = true } = {}) {
+async function selectCompany(company, { preserveSearch = false, resetPage = true } = {}) {
   const requestId = ++newsRequestId;
+  const previousCompany = state.selectedCompany;
+  const companyChanged = !previousCompany || normalizeSymbol(previousCompany.symbol) !== normalizeSymbol(company.symbol);
   state.selectedCompany = company;
   els.suggestions.classList.remove("open");
-  if (clearArticles) {
+  if (companyChanged) {
     state.topicSelection.clear();
     state.articles = [];
   }
   if (resetPage) state.page = 1;
   state.status = "loading-news";
-  state.statusMessage = `Fetching reputable news for ${company.symbol} over ${state.range}.`;
+  state.statusMessage = `Fetching reputable news for ${company.symbol}.`;
   if (!preserveSearch) els.searchInput.value = `${company.symbol} - ${company.companyName}`;
   updateUrlSymbol(company.symbol);
-  setProviderStatus("loading", `Loading ${state.range} news`);
+  setProviderStatus("loading", `Loading news`);
   renderDashboard();
 
   try {
@@ -417,23 +409,22 @@ async function selectCompany(company, { preserveSearch = false, resetPage = true
       news
         .map((article) => applyTrustedSource(article, company))
         .filter(validArticle)
-        .filter((item) => isWithinRange(item, state.range))
         .filter((item) => item.verifiedSource)
         .map((item) => applyRelevanceDiagnostics(item, company))
         .filter((item) => item.relevance.included)
     );
-    state.topicSelection.clear();
+    const visibleCount = getFilteredArticles().length;
     state.status = state.articles.length ? "ready" : "no-news";
     state.statusMessage = state.articles.length
-      ? `${state.articles.length} reputable article${state.articles.length === 1 ? "" : "s"} loaded for ${state.range}.`
-      : `No reputable news was found for ${company.symbol} in the selected ${state.range} range.`;
+      ? `${state.articles.length} reputable article${state.articles.length === 1 ? "" : "s"} loaded; ${visibleCount} match the current ${state.range} filter.`
+      : `No reputable news was found for ${company.symbol} in the available ${MAX_NEWS_RANGE} window.`;
     setProviderStatus("ready", state.articles.length ? `${state.articles.length} articles` : "No trusted news");
     renderDashboard();
   } catch (error) {
     if (requestId !== newsRequestId) return;
     state.status = "error";
     state.statusMessage = error.message;
-    state.articles = [];
+    if (companyChanged) state.articles = [];
     setProviderStatus("error", "News unavailable");
     renderDashboard();
   }
@@ -444,7 +435,7 @@ async function fetchNewsForCompany(company) {
     const params = new URLSearchParams({
       symbol: company.symbol,
       companyName: company.companyName,
-      range: state.range
+      range: MAX_NEWS_RANGE
     });
     return await fetchApiJson(`/api/news?${params.toString()}`);
   } catch (error) {
@@ -462,7 +453,7 @@ async function fetchNewsForCompany(company) {
   if (alphaKey) return fetchAlphaVantageNews(company, alphaKey);
 
   throw new Error(
-    "Live no-key news needs the local app server. Run node server.js, then open http://127.0.0.1:48992 instead of opening index.html directly."
+    "Live news needs the local app server or a configured provider key. Run node server.js and open http://127.0.0.1:48992, or add a provider key in local storage."
   );
 }
 
@@ -978,21 +969,29 @@ function buildTopicFilters() {
     els.topicFilters.innerHTML = `<span class="empty-filter">Topics appear after news is loaded.</span>`;
     return;
   }
-  const availableTopics = topicOptions.filter((topic) => state.articles.some((article) => normalizeTopic(article.topic) === topic));
+  const rangeItems = getRangeFilteredArticles();
+  const availableTopics = topicOptions.filter((topic) => rangeItems.some((article) => normalizeTopic(article.topic) === topic));
+  const visibleTopics = topicOptions.filter((topic) => availableTopics.includes(topic) || state.topicSelection.has(topic));
+  if (!visibleTopics.length && !state.topicSelection.size) {
+    els.topicFilters.innerHTML = `<span class="empty-filter">No topics appear in the selected ${state.range} range.</span>`;
+    return;
+  }
   const allTopicsChip = `
     <label class="topic-chip all-topics ${!state.topicSelection.size ? "active" : ""}">
       <input type="checkbox" value="__all__" ${!state.topicSelection.size ? "checked" : ""} />
       <span>All Topics</span>
+      <small>${rangeItems.length}</small>
     </label>
   `;
   els.topicFilters.innerHTML =
     allTopicsChip +
-    availableTopics
+    visibleTopics
       .map(
         (topic) => `
         <label class="topic-chip ${state.topicSelection.has(topic) ? "active" : ""}">
           <input type="checkbox" value="${escapeAttr(topic)}" ${state.topicSelection.has(topic) ? "checked" : ""} />
           <span>${topic}</span>
+          <small>${rangeItems.filter((article) => normalizeTopic(article.topic) === topic).length}</small>
         </label>
       `
       )
@@ -1000,10 +999,13 @@ function buildTopicFilters() {
 }
 
 function getFilteredArticles() {
-  return state.articles
-    .filter((article) => isWithinRange(article, state.range))
+  return getRangeFilteredArticles()
     .filter((article) => !state.topicSelection.size || state.topicSelection.has(normalizeTopic(article.topic)))
     .sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+}
+
+function getRangeFilteredArticles() {
+  return state.articles.filter((article) => isWithinRange(article, state.range));
 }
 
 function renderSummary(items) {
@@ -1072,14 +1074,12 @@ function renderNews(items) {
             </div>
             <p class="snippet">${article.summary}</p>
           </div>
-          <div class="metadata-cell sentiment-cell">
-            <span class="cell-label">Sentiment</span>
-            <span class="badge ${article.sentiment}">${article.sentiment}</span>
-            <span class="confidence">${Math.round(article.confidence * 100)}% confidence</span>
-          </div>
-          <div class="metadata-cell topic-cell">
-            <span class="cell-label">Topic</span>
-            <div class="topic">${article.topic}</div>
+          <div class="article-metadata">
+            <div class="sentiment-group">
+              <span class="badge ${article.sentiment}">${article.sentiment}</span>
+              <span class="confidence">${Math.round(article.confidence * 100)}% confidence</span>
+            </div>
+            <span class="topic">${article.topic}</span>
           </div>
         </article>
       `
@@ -1099,6 +1099,9 @@ function renderNews(items) {
 }
 
 function getEmptyNewsMessage() {
+  if (state.selectedCompany && state.articles.length && !getRangeFilteredArticles().length) {
+    return `No reputable articles for ${state.selectedCompany.symbol} fall inside the selected ${state.range} range.`;
+  }
   if (state.selectedCompany && state.articles.length) {
     return `No articles match the current topic filters in the selected ${state.range} range.`;
   }
@@ -1129,7 +1132,16 @@ function renderDataNote() {
 }
 
 function validArticle(article) {
-  return Boolean(article.source && article.publishedAt && article.url && article.url.startsWith("https://") && article.headline);
+  const publishedAt = new Date(article.publishedAt);
+  return Boolean(
+    article.source &&
+      article.publishedAt &&
+      Number.isFinite(publishedAt.getTime()) &&
+      publishedAt <= appNow() &&
+      article.url &&
+      article.url.startsWith("https://") &&
+      article.headline
+  );
 }
 
 function applyTrustedSource(article, company) {
@@ -1196,14 +1208,14 @@ function getArticleRelevance(article, company) {
   const symbol = normalizeSymbol(company.symbol);
   const variants = buildCompanyVariants(company);
 
-  if (hasTickerMatch(headline, symbol)) return relevanceResult(true, "headline_ticker_match", symbol);
-  if (hasTickerMatch(summary, symbol)) return relevanceResult(true, "abstract_ticker_match", symbol);
-
   const headlineVariant = findVariantMatch(headline, variants);
   if (headlineVariant) return relevanceResult(true, "headline_company_variant_match", headlineVariant);
 
   const summaryVariant = findVariantMatch(summary, variants);
   if (summaryVariant) return relevanceResult(true, "abstract_company_variant_match", summaryVariant);
+
+  if (hasTickerRelevance(headline, symbol)) return relevanceResult(true, "headline_ticker_market_context_match", symbol);
+  if (hasTickerRelevance(summary, symbol)) return relevanceResult(true, "abstract_ticker_market_context_match", symbol);
 
   return relevanceResult(false, "no_headline_or_abstract_match", "");
 }
@@ -1245,7 +1257,34 @@ function isCompanyStopWord(token) {
 function hasTickerMatch(text, symbol) {
   if (!text || !symbol) return false;
   const escaped = escapeRegExp(symbol).replace(/\\\./g, "[.-]");
-  return new RegExp(`(^|[^A-Za-z0-9])(?:[$])?${escaped}(?=$|[^A-Za-z0-9])`, "i").test(text);
+  const suffixGuard = symbol.includes(".") ? "" : `(?!\\.[A-Za-z])`;
+  return new RegExp(`(^|[^A-Za-z0-9])(?:[$])?${escaped}${suffixGuard}(?=$|[^A-Za-z0-9])`, "i").test(text);
+}
+
+function hasTickerRelevance(text, symbol) {
+  return hasTickerMatch(text, symbol) && hasMarketContext(text);
+}
+
+function hasMarketContext(text = "") {
+  const normalized = normalizeSearch(text);
+  return hasAny(normalized, [
+    "stock",
+    "stocks",
+    "shares",
+    "nasdaq",
+    "nyse",
+    "earnings",
+    "revenue",
+    "guidance",
+    "analyst",
+    "price target",
+    "market cap",
+    "investor",
+    "investors",
+    "buy",
+    "sell",
+    "rating"
+  ]);
 }
 
 function findVariantMatch(text, variants) {
@@ -1269,14 +1308,35 @@ function escapeRegExp(value = "") {
 
 function dedupeArticles(items) {
   const seen = new Set();
+  const seenTitles = new Set();
   return items.filter((item) => {
-    const canonicalUrl = item.url.replace(/\?.*$/, "").replace(/\/$/, "").toLowerCase();
-    const titleKey = normalizeSearch(item.headline).split(" ").slice(0, 10).join(" ");
-    const key = `${canonicalUrl}|${item.source}|${titleKey}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
+    const canonicalUrl = canonicalizeUrl(item.url);
+    const titleWords = normalizeSearch(item.headline)
+      .split(" ")
+      .filter((word) => word.length > 2)
+      .slice(0, 12);
+    const titleKey = titleWords.join(" ");
+    const timeBucket = new Date(item.publishedAt).toISOString().slice(0, 10);
+    const urlKey = canonicalUrl;
+    const fuzzyTitleKey = titleWords.length >= 5 ? `${timeBucket}|${titleKey}` : "";
+    if (seen.has(urlKey) || (fuzzyTitleKey && seenTitles.has(fuzzyTitleKey))) return false;
+    seen.add(urlKey);
+    if (fuzzyTitleKey) seenTitles.add(fuzzyTitleKey);
     return true;
   });
+}
+
+function canonicalizeUrl(url = "") {
+  try {
+    const parsed = new URL(url);
+    ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "guccounter"].forEach((param) =>
+      parsed.searchParams.delete(param)
+    );
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/, "").toLowerCase();
+  } catch {
+    return String(url).replace(/\?.*$/, "").replace(/\/$/, "").toLowerCase();
+  }
 }
 
 function readSymbolCache() {
@@ -1369,7 +1429,7 @@ function isWithinRange(article, range) {
 }
 
 function getOverallSentiment(counts, total) {
-  if (state.status === "empty") return "No Search";
+  if (!state.selectedCompany && state.status === "empty") return "No Search";
   if (!total) return "No Data";
   const sorted = ["Positive", "Neutral", "Negative"].sort((a, b) => counts[b] - counts[a]);
   if (counts[sorted[0]] === counts[sorted[1]]) return "Neutral";

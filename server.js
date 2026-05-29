@@ -805,7 +805,7 @@ function classifyTopic(text) {
   if (hasAny(lower, ["sec", "regulation", "regulatory", "export control", "antitrust"])) return "Regulation";
   if (hasAny(lower, ["acquire", "merger", "partnership", "stake", "investment"])) return "M&A";
   if (hasAny(lower, ["competition", "rival", "market share"])) return "Competition";
-  return "News";
+  return "Other";
 }
 
 function serveStatic(rawPath, res) {
@@ -964,7 +964,16 @@ function isBoilerplateArticleText(text = "") {
 }
 
 function validArticle(article) {
-  return Boolean(article.source && article.publishedAt && article.url && article.url.startsWith("https://") && article.headline);
+  const publishedAt = new Date(article.publishedAt);
+  return Boolean(
+    article.source &&
+      article.publishedAt &&
+      Number.isFinite(publishedAt.getTime()) &&
+      publishedAt <= new Date() &&
+      article.url &&
+      article.url.startsWith("https://") &&
+      article.headline
+  );
 }
 
 function applyTrustedSource(article, symbol, companyName) {
@@ -1032,14 +1041,14 @@ function getArticleRelevance(article, symbol, companyName) {
   const normalizedSymbol = normalizeSymbol(symbol);
   const variants = buildCompanyVariants(normalizedSymbol, companyName);
 
-  if (hasTickerMatch(headline, normalizedSymbol)) return relevanceResult(true, "headline_ticker_match", normalizedSymbol);
-  if (hasTickerMatch(summary, normalizedSymbol)) return relevanceResult(true, "abstract_ticker_match", normalizedSymbol);
-
   const headlineVariant = findVariantMatch(headline, variants);
   if (headlineVariant) return relevanceResult(true, "headline_company_variant_match", headlineVariant);
 
   const summaryVariant = findVariantMatch(summary, variants);
   if (summaryVariant) return relevanceResult(true, "abstract_company_variant_match", summaryVariant);
+
+  if (hasTickerRelevance(headline, normalizedSymbol)) return relevanceResult(true, "headline_ticker_market_context_match", normalizedSymbol);
+  if (hasTickerRelevance(summary, normalizedSymbol)) return relevanceResult(true, "abstract_ticker_market_context_match", normalizedSymbol);
 
   return relevanceResult(false, "no_headline_or_abstract_match", "");
 }
@@ -1079,7 +1088,34 @@ function isCompanyStopWord(token) {
 function hasTickerMatch(text, symbol) {
   if (!text || !symbol) return false;
   const escaped = escapeRegExp(symbol).replace(/\\\./g, "[.-]");
-  return new RegExp(`(^|[^A-Za-z0-9])(?:[$])?${escaped}(?=$|[^A-Za-z0-9])`, "i").test(text);
+  const suffixGuard = symbol.includes(".") ? "" : `(?!\\.[A-Za-z])`;
+  return new RegExp(`(^|[^A-Za-z0-9])(?:[$])?${escaped}${suffixGuard}(?=$|[^A-Za-z0-9])`, "i").test(text);
+}
+
+function hasTickerRelevance(text, symbol) {
+  return hasTickerMatch(text, symbol) && hasMarketContext(text);
+}
+
+function hasMarketContext(text = "") {
+  const normalized = normalizeSearch(text);
+  return hasAny(normalized, [
+    "stock",
+    "stocks",
+    "shares",
+    "nasdaq",
+    "nyse",
+    "earnings",
+    "revenue",
+    "guidance",
+    "analyst",
+    "price target",
+    "market cap",
+    "investor",
+    "investors",
+    "buy",
+    "sell",
+    "rating"
+  ]);
 }
 
 function findVariantMatch(text, variants) {
