@@ -1,4 +1,4 @@
-# News-Sentiment-Analysis
+# Stock News Sentiment Analytics Platform
 
 News sentiment analysis using NLP.
 
