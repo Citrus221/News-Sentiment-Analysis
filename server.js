@@ -147,14 +147,16 @@ async function getNews(params) {
   providerAttempts.push(() => fetchNoKeyNews(symbol, companyName, cutoff));
 
   const errors = [];
-  for (const attempt of providerAttempts) {
-    try {
-      const articles = await attempt();
-      if (articles.length) return articles;
-    } catch (error) {
-      errors.push(error.message);
-    }
+  const results = await Promise.allSettled(providerAttempts.map((attempt) => attempt()));
+  for (const result of results) {
+    if (result.status === "fulfilled") continue;
+    errors.push(result.reason?.message || String(result.reason));
   }
+
+  const articles = dedupeArticles(results.flatMap((result) => (result.status === "fulfilled" ? result.value : []))).sort(
+    (a, b) => new Date(b.publishedAt) - new Date(a.publishedAt)
+  );
+  if (articles.length) return articles;
 
   throw statusError(
     `No recent reputable news was found for ${symbol}. Provider attempts: ${errors.join(" | ") || "all providers returned no articles."}`,
