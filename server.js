@@ -84,6 +84,9 @@ http
       if (url.pathname === "/api/news") {
         return sendJson(res, await getNews(url.searchParams));
       }
+      if (url.pathname === "/api/news-diagnostics") {
+        return sendJson(res, await getNewsDiagnostics(url.searchParams));
+      }
       return serveStatic(url.pathname, res);
     } catch (error) {
       sendJson(res, { error: error.message }, error.statusCode || 500);
@@ -134,20 +137,68 @@ async function getNews(params) {
   const cutoff = getRangeCutoff(range);
   if (!symbol) throw statusError("Missing symbol.", 400);
 
+  const { articles, errors } = await collectProviderArticles(symbol, companyName, cutoff);
+  if (articles.length) return articles;
+
+  throw statusError(
+    `No recent reputable news was found for ${symbol}. Provider attempts: ${errors.join(" | ") || "all providers returned no articles."}`,
+    404
+  );
+}
+
+async function getNewsDiagnostics(params) {
+  const symbol = params.get("symbol");
+  const companyName = params.get("companyName") || "";
+  const range = rangeDays[params.get("range")] ? params.get("range") : "30d";
+  const cutoff = getRangeCutoff(range);
+  if (!symbol) throw statusError("Missing symbol.", 400);
+
+  const details = await collectProviderArticles(symbol, companyName, cutoff);
+  return {
+    symbol,
+    range,
+    cutoff: cutoff.toISOString(),
+    providerCount: details.providerResults.length,
+    totalArticles: details.articles.length,
+    sourceCounts: countBy(details.articles, "source"),
+    topicCounts: countBy(details.articles, "topic"),
+    providers: details.providerResults.map((result) => ({
+      name: result.name,
+      status: result.status,
+      count: result.articles.length,
+      error: result.error,
+      sourceCounts: countBy(result.articles, "source"),
+      samples: result.articles.slice(0, 5).map((article) => ({
+        headline: article.headline,
+        source: article.source,
+        publishedAt: article.publishedAt
+      }))
+    }))
+  };
+}
+
+async function collectProviderArticles(symbol, companyName, cutoff) {
   const providerAttempts = [];
   if (process.env.POLYGON_API_KEY) {
-    providerAttempts.push(() => fetchPolygonProviderNews(symbol, companyName, cutoff));
+    providerAttempts.push({ name: "polygon", fetch: () => fetchPolygonProviderNews(symbol, companyName, cutoff) });
   }
   if (process.env.FMP_API_KEY) {
-    providerAttempts.push(() => fetchFmpProviderNews(symbol, companyName, cutoff));
+    providerAttempts.push({ name: "fmp", fetch: () => fetchFmpProviderNews(symbol, companyName, cutoff) });
   }
   if (process.env.ALPHAVANTAGE_API_KEY) {
-    providerAttempts.push(() => fetchAlphaVantageProviderNews(symbol, companyName, cutoff));
+    providerAttempts.push({ name: "alphaVantage", fetch: () => fetchAlphaVantageProviderNews(symbol, companyName, cutoff) });
   }
-  providerAttempts.push(() => fetchNoKeyNews(symbol, companyName, cutoff));
+  providerAttempts.push({ name: "noKeyRss", fetch: () => fetchNoKeyNews(symbol, companyName, cutoff) });
 
   const errors = [];
-  const results = await Promise.allSettled(providerAttempts.map((attempt) => attempt()));
+  const results = await Promise.allSettled(providerAttempts.map((attempt) => attempt.fetch()));
+  const providerResults = results.map((result, index) => {
+    const name = providerAttempts[index].name;
+    if (result.status === "fulfilled") {
+      return { name, status: "fulfilled", articles: result.value, error: "" };
+    }
+    return { name, status: "rejected", articles: [], error: result.reason?.message || String(result.reason) };
+  });
   for (const result of results) {
     if (result.status === "fulfilled") continue;
     errors.push(result.reason?.message || String(result.reason));
@@ -156,12 +207,7 @@ async function getNews(params) {
   const articles = dedupeArticles(results.flatMap((result) => (result.status === "fulfilled" ? result.value : []))).sort(
     (a, b) => new Date(b.publishedAt) - new Date(a.publishedAt)
   );
-  if (articles.length) return articles;
-
-  throw statusError(
-    `No recent reputable news was found for ${symbol}. Provider attempts: ${errors.join(" | ") || "all providers returned no articles."}`,
-    404
-  );
+  return { articles, errors, providerResults };
 }
 
 async function fetchPolygonProviderNews(symbol, companyName, cutoff) {
@@ -1198,6 +1244,14 @@ function dedupeArticles(items) {
     seenTitles.add(fuzzyTitleKey);
     return true;
   });
+}
+
+function countBy(items, key) {
+  return items.reduce((counts, item) => {
+    const value = item[key] || "Unknown";
+    counts[value] = (counts[value] || 0) + 1;
+    return counts;
+  }, {});
 }
 
 function canonicalizeUrl(url = "") {
