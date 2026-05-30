@@ -990,7 +990,7 @@ function renderTarget(items = []) {
   const meta = document.querySelector("#targetMeta");
   const count = document.querySelector("#summaryArticleCount");
   const range = document.querySelector("#summaryRange");
-  count.textContent = items.length.toLocaleString();
+  count.textContent = state.status === "loading-news" ? "..." : items.length.toLocaleString();
   range.textContent = state.range;
   if (!state.selectedCompany) {
     name.textContent = "No company selected";
@@ -1003,6 +1003,10 @@ function renderTarget(items = []) {
 }
 
 function buildTopicFilters() {
+  if (state.status === "loading-news") {
+    els.topicFilters.innerHTML = `<span class="empty-filter">Topics will appear after news finishes loading.</span>`;
+    return;
+  }
   if (!state.articles.length) {
     els.topicFilters.innerHTML = `<span class="empty-filter">Topics appear after news is loaded.</span>`;
     return;
@@ -1047,6 +1051,14 @@ function getRangeFilteredArticles() {
 }
 
 function renderSummary(items) {
+  if (state.status === "loading-news") {
+    document.querySelector("#overallLabel").textContent = "Loading";
+    document.querySelector("#overallConfidence").textContent = "Loading news";
+    document.querySelector("#overallReason").textContent = state.statusMessage;
+    document.querySelector("#asOf").textContent = `As of ${formatDate(appNow())}`;
+    return;
+  }
+
   const counts = countSentiments(items);
   const overall = getOverallSentiment(counts, items.length);
   const avgConfidence = items.length
@@ -1097,7 +1109,9 @@ function renderNews(items) {
   const start = (state.page - 1) * state.pageSize;
   const pageItems = items.slice(start, start + state.pageSize);
   document.querySelector("#resultMeta").textContent =
-    items.length > 0
+    state.status === "loading-news"
+      ? "Fetching reputable news and sentiment signals."
+      : items.length > 0
       ? `Showing ${items.length} reputable article${items.length === 1 ? "" : "s"} across ${getTopicFilterLabel()} in ${state.range}.`
       : "Only articles inside the selected time range are shown.";
 
@@ -1146,6 +1160,9 @@ function renderNews(items) {
 }
 
 function getEmptyNewsMessage() {
+  if (state.status === "loading-news") {
+    return state.statusMessage;
+  }
   if (state.selectedCompany && state.articles.length && !getRangeFilteredArticles().length) {
     return `No reputable articles for ${state.selectedCompany.symbol} fall inside the selected ${state.range} range.`;
   }
