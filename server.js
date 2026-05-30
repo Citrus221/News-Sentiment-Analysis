@@ -37,6 +37,8 @@ const trustedSourceRules = [
 ];
 const blockedSourceNames = ["motley fool", "zacks", "seeking alpha", "investorplace", "benzinga", "tipranks"];
 const fetchTimeoutMs = 8000;
+const providerFetchTimeoutMs = 20000;
+const bodyTextFetchTimeoutMs = 4000;
 const debugRelevance = process.env.DEBUG_RELEVANCE === "1";
 const bodyTextCache = new Map();
 const robotsCache = new Map();
@@ -910,7 +912,7 @@ function serveStatic(rawPath, res) {
 
 async function fetchText(url) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), fetchTimeoutMs);
+  const timeout = setTimeout(() => controller.abort(), providerFetchTimeoutMs);
   const response = await fetch(url, {
     signal: controller.signal,
     headers: {
@@ -923,7 +925,7 @@ async function fetchText(url) {
 
 async function fetchJson(url) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), fetchTimeoutMs);
+  const timeout = setTimeout(() => controller.abort(), providerFetchTimeoutMs);
   const response = await fetch(url, {
     signal: controller.signal,
     headers: {
@@ -943,7 +945,7 @@ async function fetchArticleBodyText(url = "") {
       return "";
     }
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), fetchTimeoutMs);
+    const timeout = setTimeout(() => controller.abort(), bodyTextFetchTimeoutMs);
     const response = await fetch(url, {
       signal: controller.signal,
       headers: {
