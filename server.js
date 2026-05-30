@@ -297,6 +297,7 @@ async function fetchAlphaVantageProviderNews(symbol, companyName, cutoff) {
 async function fetchNoKeyNews(symbol, companyName, cutoff) {
   const feeds = await Promise.allSettled([
     fetchYahooFinanceNews(symbol),
+    fetchNasdaqNews(symbol),
     ...buildGoogleNewsQueries(symbol, companyName).map((query) => fetchGoogleNews(query, symbol))
   ]);
   const items = feeds.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
@@ -319,6 +320,25 @@ async function fetchYahooFinanceNews(symbol) {
     url: item.link,
     summary: item.description,
     relatedSymbols: [symbol]
+  }));
+}
+
+async function fetchNasdaqNews(symbol) {
+  const params = new URLSearchParams({
+    q: `${symbol}|stocks`,
+    offset: "0",
+    limit: "100"
+  });
+  const response = await fetchJson(`https://api.nasdaq.com/api/news/topic/articlebysymbol?${params.toString()}`);
+  return (response.data?.rows || []).map((item) => ({
+    id: item.id || item.url || item.title,
+    headline: item.title,
+    source: "Nasdaq",
+    publishedAt: parseNasdaqDate(item.created),
+    url: item.url?.startsWith("https://") ? item.url : `https://www.nasdaq.com${item.url || ""}`,
+    summary: item.description,
+    relatedSymbols: (item.related_symbols || []).map((value) => String(value).split("|")[0].toUpperCase()),
+    publisherHomepage: "https://www.nasdaq.com"
   }));
 }
 
@@ -1346,6 +1366,11 @@ function hasAny(text, terms) {
 function parseAlphaDate(value = "") {
   if (!value || value.length < 8) return value;
   return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}T${value.slice(9, 11) || "00"}:${value.slice(11, 13) || "00"}:00Z`;
+}
+
+function parseNasdaqDate(value = "") {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : value;
 }
 
 function getRangeCutoff(range) {
