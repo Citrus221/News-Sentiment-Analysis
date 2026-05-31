@@ -177,6 +177,10 @@ function bindEvents() {
     await handleAnalyze();
   });
 
+  document.querySelector(".search-submit")?.addEventListener("pointerdown", () => {
+    els.suggestions.classList.remove("open");
+  });
+
   els.suggestions.addEventListener("click", async (event) => {
     const option = event.target.closest("[data-symbol]");
     if (!option) return;
@@ -214,12 +218,12 @@ function bindEvents() {
   });
 
   if (typeof window.addEventListener === "function") {
-    window.addEventListener("resize", syncInsightPanelHeight);
+    window.addEventListener("resize", syncInsightPanelToNewsHeight);
   }
   if (window.ResizeObserver) {
-    const mainColumn = document.querySelector(".main-column");
-    if (mainColumn) {
-      new ResizeObserver(syncInsightPanelHeight).observe(mainColumn);
+    const newsPanel = document.querySelector(".news-panel");
+    if (newsPanel) {
+      new ResizeObserver(syncInsightPanelToNewsHeight).observe(newsPanel);
     }
   }
 }
@@ -949,29 +953,26 @@ function renderDashboard() {
   renderNews(filtered);
   renderInsights(filtered);
   renderDataNote();
-  syncInsightPanelHeight();
-  window.setTimeout?.(syncInsightPanelHeight, 0);
+  syncInsightPanelToNewsHeight();
+  window.setTimeout?.(syncInsightPanelToNewsHeight, 0);
 }
 
-function syncInsightPanelHeight() {
-  const schedule = typeof window.requestAnimationFrame === "function" ? window.requestAnimationFrame.bind(window) : (callback) => callback();
-  schedule(() => {
-    const mainColumn = document.querySelector(".main-column");
-    const insightPanel = document.querySelector(".insight-panel");
-    const workspace = document.querySelector(".workspace");
-    if (!mainColumn || !insightPanel || !workspace) return;
-    if (typeof mainColumn.getBoundingClientRect !== "function" || typeof insightPanel.getBoundingClientRect !== "function" || !workspace.style) return;
+function syncInsightPanelToNewsHeight() {
+  const newsPanel = document.querySelector(".news-panel");
+  const workspace = document.querySelector(".workspace");
+  if (!newsPanel || !workspace || !workspace.style) return;
+  if (typeof newsPanel.getBoundingClientRect !== "function") return;
 
-    if (typeof window.matchMedia === "function" && window.matchMedia("(max-width: 1120px)").matches) {
-      workspace.style.removeProperty("--insight-panel-height");
-      return;
-    }
+  if (typeof window.matchMedia === "function" && window.matchMedia("(max-width: 1120px)").matches) {
+    workspace.style.removeProperty("--insight-panel-height");
+    return;
+  }
 
-    const mainRect = mainColumn.getBoundingClientRect();
-    const insightRect = insightPanel.getBoundingClientRect();
-    const height = Math.max(0, Math.ceil(mainRect.bottom - insightRect.top));
-    workspace.style.setProperty("--insight-panel-height", `${height}px`);
-  });
+  workspace.style.removeProperty("--insight-panel-height");
+  const newsHeight = Math.ceil(newsPanel.getBoundingClientRect().height);
+  if (newsHeight > 0) {
+    workspace.style.setProperty("--insight-panel-height", `${newsHeight}px`);
+  }
 }
 
 function resetDashboard({ preserveUrl = false } = {}) {
